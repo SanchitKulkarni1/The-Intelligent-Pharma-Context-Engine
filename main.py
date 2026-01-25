@@ -5,6 +5,8 @@ from schema import PharmaDocument, RawOCR, OCRToken
 from src.ocr import run_ocr                                                     
 from src.entity_extraction import extract_entities
 from src.verification import verify_drug
+from src.utils.ingredients import extract_ingredients_from_rxnorm
+from src.enrichment import enrich_with_fda
 
 
 def build_document() -> PharmaDocument:
@@ -42,6 +44,8 @@ if __name__ == "__main__":
     doc = ocr_stage(doc, "images/testimage.jpeg")
     doc = extract_entities(doc)
     doc = verify_drug(doc)
+    ingredients = extract_ingredients_from_rxnorm(doc.verification.final_canonical_name or "")
+    doc.enrichment = enrich_with_fda(ingredients)
 
     print("=== RAW OCR TEXT ===")
     print(doc.raw_ocr.full_text)
@@ -51,3 +55,6 @@ if __name__ == "__main__":
 
     print("\n=== VERIFICATION ===")
     print(doc.verification)
+
+    print("\n=== ENRICHMENT ===")
+    print(doc.enrichment)

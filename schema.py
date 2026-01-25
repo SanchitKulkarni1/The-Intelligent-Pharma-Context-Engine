@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
@@ -37,8 +37,8 @@ class Verification(BaseModel):
 
 class Enrichment(BaseModel):
     storage_requirements: Optional[str]
-    common_side_effects: List[str] = []
-    safety_warnings: List[str] = []
+    common_side_effects: List[str] = Field(default_factory=list)
+    safety_warnings: List[str] = Field(default_factory=list)
 
 
 class PharmaDocument(BaseModel):
