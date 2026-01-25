@@ -1,0 +1,6 @@
+paddlepaddle
+paddleocr
+opencv-python-headless
+rapidfuzz
+requests
+numpy
