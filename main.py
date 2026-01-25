@@ -1,0 +1,53 @@
+from uuid import uuid4
+from datetime import datetime, timezone
+
+from schema import PharmaDocument, RawOCR, OCRToken
+from src.ocr import run_ocr                                                     
+from src.entity_extraction import extract_entities
+from src.verification import verify_drug
+
+
+def build_document() -> PharmaDocument:
+    return PharmaDocument(
+        document_id=str(uuid4()),
+        timestamp_utc=datetime.now(timezone.utc)
+    )
+
+def ocr_stage(doc: PharmaDocument, image_path: str) -> PharmaDocument:
+    ocr_result = run_ocr(image_path)
+
+    if not ocr_result or not ocr_result.get("tokens"):
+        raise RuntimeError("OCR failed: no text detected")
+
+    doc.raw_ocr = RawOCR(
+        engine=ocr_result["engine"],
+        full_text=ocr_result["full_text"],
+        tokens=[
+            OCRToken(
+                text=t["text"],
+                confidence=t["confidence"],
+                bbox=t["bbox"]
+            )
+            for t in ocr_result["tokens"]
+        ]
+    )
+
+    return doc
+
+
+
+if __name__ == "__main__":
+    doc = build_document()
+
+    doc = ocr_stage(doc, "images/testimage.jpeg")
+    doc = extract_entities(doc)
+    doc = verify_drug(doc)
+
+    print("=== RAW OCR TEXT ===")
+    print(doc.raw_ocr.full_text)
+
+    print("\n=== EXTRACTED ENTITIES ===")
+    print(doc.extracted_entities)
+
+    print("\n=== VERIFICATION ===")
+    print(doc.verification)
