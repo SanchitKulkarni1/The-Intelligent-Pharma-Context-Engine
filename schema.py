@@ -27,6 +27,10 @@ class ExtractedEntities(BaseModel):
     dosage: Optional[ExtractedEntity] = None
     composition: Optional[ExtractedEntity] = None
 
+class Barcode(BaseModel):
+    value: str
+    symbology: Optional[str] = None
+    confidence: float = 1.0
 
 class Verification(BaseModel):
     rxnorm_cui: Optional[str]
@@ -48,3 +52,4 @@ class PharmaDocument(BaseModel):
     extracted_entities: Optional[ExtractedEntities] = None
     verification: Optional[Verification] = None
     enrichment: Optional[Enrichment] = None
+    barcode: Optional[Barcode] = None

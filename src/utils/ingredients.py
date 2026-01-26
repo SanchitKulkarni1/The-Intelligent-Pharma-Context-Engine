@@ -1,32 +1,35 @@
-import re
+import requests
 from typing import List
 
-KNOWN_INGREDIENTS = [
-    "acetaminophen",
-    "hydrocodone",
-    "ibuprofen",
-    "amoxicillin",
-    "clavulanate",
-    "metformin",
-    "paracetamol",
-    "pseudoephedrine",
-    "chlorpheniramine"
-]
+RXNORM_RELATED_URL = "https://rxnav.nlm.nih.gov/REST/rxcui/{rxcui}/related.json"
 
-def extract_ingredients_from_rxnorm(name: str) -> List[str]:
+
+def extract_ingredients_from_rxnorm(rxcui: str) -> List[str]:
     """
-    Extract active ingredients from a verified RxNorm drug name.
+    Production-grade ingredient extraction using RxNorm relationships.
+    Resolves authoritative active ingredients (IN / PIN).
     """
-    name_lower = name.lower()
-    found = []
+    if not rxcui:
+        return []
 
-    for ingredient in KNOWN_INGREDIENTS:
-        if ingredient in name_lower:
-            found.append(ingredient)
+    try:
+        resp = requests.get(
+            RXNORM_RELATED_URL.format(rxcui=rxcui),
+            params={"tty": "IN+PIN"},
+            timeout=5
+        )
+        data = resp.json()
 
-    # Fallback: split on slash if unknown
-    if not found:
-        parts = re.split(r"[\/,+]", name_lower)
-        found = [p.strip() for p in parts if len(p.strip()) > 4]
+        ingredients = []
 
-    return list(set(found))
+        groups = data.get("relatedGroup", {}).get("conceptGroup", [])
+        for group in groups:
+            for prop in group.get("conceptProperties", []) or []:
+                name = prop.get("name")
+                if name:
+                    ingredients.append(name.lower())
+
+        return sorted(set(ingredients))
+
+    except Exception:
+        return []

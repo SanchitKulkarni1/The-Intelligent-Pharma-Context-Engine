@@ -1,17 +1,23 @@
-# src/verification.py
 import re
-from pydantic import BaseModel
 import requests
 from rapidfuzz import fuzz
 from typing import List, Dict, Optional
 
 from schema import Verification
-from src.llm.reranker import rerank_rxnorm_candidates
+from src.utils.ingredients import extract_ingredients_from_rxnorm
+from src.utils.reranker import rerank_rxnorm_candidates
+from src.utils.ndc import lookup_drug_by_ndc
 
+
+# -----------------------------
+# Config
+# -----------------------------
 
 RXNORM_SEARCH_URL = "https://rxnav.nlm.nih.gov/REST/drugs.json"
-USE_LLM_RERANKER = True
+RXNORM_CUI_URL = "https://rxnav.nlm.nih.gov/REST/rxcui.json"
 
+USE_LLM_RERANKER = True
+LLM_TOP_K = 5
 
 STOPWORDS = {
     "rx", "take", "tablet", "tablets", "capsule", "capsules",
@@ -24,13 +30,6 @@ FORMULATION_KEYWORDS = {
     "extended release", "12 hr", "er", "mg/ml"
 }
 
-class Verification(BaseModel):
-    rxnorm_cui: Optional[str]
-    matched_term: Optional[str]
-    match_score: float
-    final_canonical_name: Optional[str]
-    justification: Optional[str] = None
-    
 
 # -----------------------------
 # Helpers
@@ -38,6 +37,16 @@ class Verification(BaseModel):
 
 def normalize_token(token: str) -> str:
     return re.sub(r"[^a-z0-9/]", "", token.lower())
+
+
+def normalize_ndc(raw: str) -> Optional[str]:
+    """
+    Normalize barcode → NDC (10 or 11 digits).
+    """
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) in (10, 11):
+        return digits
+    return None
 
 
 def extract_candidate_terms(text: str) -> List[str]:
@@ -78,10 +87,10 @@ def query_rxnorm(term: str) -> List[str]:
     return results
 
 
-def fetch_rxnorm_cui(drug_name: str):
+def fetch_rxnorm_cui(drug_name: str) -> Optional[str]:
     try:
         r = requests.get(
-            "https://rxnav.nlm.nih.gov/REST/rxcui.json",
+            RXNORM_CUI_URL,
             params={"name": drug_name},
             timeout=5
         )
@@ -90,20 +99,7 @@ def fetch_rxnorm_cui(drug_name: str):
         return None
 
 
-def infer_ingredients(rx_name: str) -> List[str]:
-    rx = rx_name.lower()
-    ingredients = []
 
-    if "hydrocodone" in rx:
-        ingredients.append("hydrocodone")
-    if "acetaminophen" in rx or "apap" in rx:
-        ingredients.append("acetaminophen")
-    if "pseudoephedrine" in rx:
-        ingredients.append("pseudoephedrine")
-    if "chlorpheniramine" in rx:
-        ingredients.append("chlorpheniramine")
-
-    return ingredients
 
 
 def infer_form(rx_name: str) -> str:
@@ -120,19 +116,48 @@ def infer_form(rx_name: str) -> str:
 # -----------------------------
 
 def verify_drug(doc):
+    """
+    Verification pipeline:
+    1. Barcode (NDC) override
+    2. OCR → RxNorm candidate generation
+    3. Optional LLM re-ranking (ambiguity only)
+    4. Deterministic fallback
+    """
+
+    # =====================================================
+    # 1️⃣ BARCODE OVERRIDE (HIGHEST TRUST)
+    # =====================================================
+    if getattr(doc, "barcode", None):
+        ndc = normalize_ndc(doc.barcode.value)
+        if ndc:
+            drug = lookup_drug_by_ndc(ndc)
+            if drug:
+                doc.verification = Verification(
+                    rxnorm_cui=drug.get("rxcui"),
+                    matched_term=drug["name"],
+                    match_score=1.0,
+                    final_canonical_name=drug["name"],
+                    justification="Barcode-derived NDC used as authoritative identifier"
+                )
+                return doc  # 🔒 HARD STOP
+
+    # =====================================================
+    # 2️⃣ OCR → RXNORM CANDIDATES
+    # =====================================================
+    if not doc.raw_ocr:
+        return doc
+
     text = doc.raw_ocr.full_text
     tokens = extract_candidate_terms(text)
 
     candidates: Dict[str, Dict] = {}
 
-    # 1️⃣ Collect ALL plausible RxNorm candidates
     for token in tokens:
         for rx_name in query_rxnorm(token):
             if formulation_mismatch(rx_name, text):
                 continue
 
             score = fuzz.token_set_ratio(token, rx_name)
-
             if score >= 50:
                 if rx_name not in candidates or score > candidates[rx_name]["score"]:
                     candidates[rx_name] = {
@@ -149,49 +174,63 @@ def verify_drug(doc):
         )
         return doc
 
-    rxnorm_candidates = list(candidates.values())
+    rxnorm_candidates = sorted(
+        candidates.values(),
+        key=lambda x: x["score"],
+        reverse=True
+    )
 
-    # 2️⃣ Decide LLM usage
-    use_llm = USE_LLM_RERANKER and len(rxnorm_candidates) > 1
+    top = rxnorm_candidates[0]
+    second = rxnorm_candidates[1] if len(rxnorm_candidates) > 1 else None
 
-    # 3️⃣ LLM Re-ranking
-    if use_llm:
+    # =====================================================
+    # 3️⃣ OPTIONAL LLM RE-RANKING (ONLY IF AMBIGUOUS)
+    # =====================================================
+    chosen_name = None
+    justification = None
+    confidence = None
+
+    ambiguous = (
+        USE_LLM_RERANKER
+        and second is not None
+        and abs(top["score"] - second["score"]) < 15
+    )
+
+    if ambiguous:
         print(">>> LLM RE-RANKER INVOKED <<<")
 
         llm_input = [
             {
                 "name": c["name"],
-                "ingredients": infer_ingredients(c["name"]),
+                "ingredients": extract_ingredients_from_rxnorm(c["name"]),
                 "form": infer_form(c["name"])
             }
-            for c in rxnorm_candidates
+            for c in rxnorm_candidates[:LLM_TOP_K]
         ]
 
-    reranked = rerank_rxnorm_candidates(
-        ocr_text=text,
-        rxnorm_candidates=llm_input
-    )
+        reranked = rerank_rxnorm_candidates(
+            ocr_text=text,
+            rxnorm_candidates=llm_input
+        )
 
-    print("LLM raw output:", reranked)
+        if reranked:
+            chosen_name = reranked["name"]
+            justification = reranked.get("reason")
+            confidence = 0.95
 
-    if reranked:
-        chosen_name = reranked["name"]
-        print("LLM CHOSEN NAME:", chosen_name)
-        print("LLM REASON:", reranked.get("reason"))
-    else:
-        print("LLM returned None — falling back to deterministic")
-        chosen_name = max(rxnorm_candidates, key=lambda x: x["score"])["name"]
-
+    # =====================================================
+    # 4️⃣ DETERMINISTIC FALLBACK
+    # =====================================================
+    if not chosen_name:
+        chosen_name = top["name"]
+        confidence = round(top["score"] / 100, 2)
 
     cui = fetch_rxnorm_cui(chosen_name)
-
-    justification=reranked.get("reason") if reranked else None
-    print ("Reason for choosing:", justification)
 
     doc.verification = Verification(
         rxnorm_cui=cui,
         matched_term=chosen_name,
-        match_score=0.95,
+        match_score=confidence,
         final_canonical_name=chosen_name,
         justification=justification
     )

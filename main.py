@@ -2,7 +2,9 @@ from uuid import uuid4
 from datetime import datetime, timezone
 
 from schema import PharmaDocument, RawOCR, OCRToken
-from src.ocr import run_ocr                                                     
+from src.vision.stage0 import detect_regions
+from src.barcode import detect_barcode_from_image
+from src.ocr import run_ocr_from_image
 from src.entity_extraction import extract_entities
 from src.verification import verify_drug
 from src.utils.ingredients import extract_ingredients_from_rxnorm
@@ -15,8 +17,9 @@ def build_document() -> PharmaDocument:
         timestamp_utc=datetime.now(timezone.utc)
     )
 
-def ocr_stage(doc: PharmaDocument, image_path: str) -> PharmaDocument:
-    ocr_result = run_ocr(image_path)
+
+def ocr_stage_from_crop(doc: PharmaDocument, label_crop) -> PharmaDocument:
+    ocr_result = run_ocr_from_image(label_crop)
 
     if not ocr_result or not ocr_result.get("tokens"):
         raise RuntimeError("OCR failed: no text detected")
@@ -37,16 +40,39 @@ def ocr_stage(doc: PharmaDocument, image_path: str) -> PharmaDocument:
     return doc
 
 
-
 if __name__ == "__main__":
     doc = build_document()
 
-    doc = ocr_stage(doc, "images/testimage.jpeg")
+    # -----------------------------
+    # STAGE 0: VISION (REGIONS)
+    # -----------------------------
+    regions = detect_regions("images/barcode1.jpeg")
+
+    # -----------------------------
+    # BARCODE (HIGHEST TRUST)
+    # -----------------------------
+    doc.barcode = detect_barcode_from_image(regions.barcode_image)
+
+    # -----------------------------
+    # OCR ONLY ON LABEL REGION
+    # -----------------------------
+    doc = ocr_stage_from_crop(doc, regions.label_image)
+
+    # -----------------------------
+    # NLP PIPELINE
+    # -----------------------------
     doc = extract_entities(doc)
     doc = verify_drug(doc)
-    ingredients = extract_ingredients_from_rxnorm(doc.verification.final_canonical_name or "")
+
+    ingredients = extract_ingredients_from_rxnorm(
+        doc.verification.rxnorm_cui
+    )
+
     doc.enrichment = enrich_with_fda(ingredients)
 
+    # -----------------------------
+    # OUTPUT
+    # -----------------------------
     print("=== RAW OCR TEXT ===")
     print(doc.raw_ocr.full_text)
 
