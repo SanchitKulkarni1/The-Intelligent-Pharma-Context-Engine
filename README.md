@@ -189,6 +189,24 @@ python main.py images/barcode1.jpeg
 python main.py images/testimage.jpeg --no-json
 ```
 
+### 🌐 Web UI (Streamlit)
+
+A clean, modern web interface is available:
+
+```bash
+streamlit run app.py
+```
+
+**Features:**
+- 📤 Drag-and-drop image upload
+- 🎯 Sample image gallery for quick testing
+- 📊 Metrics dashboard (OCR tokens, match score, enrichment status)
+- 📑 Tabbed results (OCR, Entities, Verification, Enrichment, JSON)
+- 📥 One-click JSON download
+- ⚙️ Toggle preprocessing and LLM re-ranking
+
+![Web UI](https://img.shields.io/badge/UI-Streamlit-FF4B4B?logo=streamlit)
+
 ### Programmatic Usage
 
 ```python
@@ -397,7 +415,8 @@ python evaluation.py batch -p ./outputs -g ground_truths.json
 
 ```
 The-Intelligent-Pharma-Context-Engine/
-├── main.py                      # Entry point CLI
+├── main.py                      # CLI entry point
+├── app.py                       # Streamlit Web UI
 ├── evaluation.py                # CER & Entity Match Rate calculator
 ├── schema.py                    # Pydantic models
 ├── best.pt                      # Trained YOLOv8 model

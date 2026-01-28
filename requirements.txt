@@ -7,3 +7,6 @@ numpy
 ultralytics
 pyzbar
 pydantic
+streamlit
+google-genai
+python-dotenv
