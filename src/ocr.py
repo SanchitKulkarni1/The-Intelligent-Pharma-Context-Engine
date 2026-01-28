@@ -47,15 +47,54 @@ def _parse_ocr_result(result) -> Dict:
 # STAGE-0 COMPATIBLE OCR (IMAGE INPUT)
 # -------------------------------------------------
 
-def run_ocr_from_image(image: np.ndarray) -> Dict:
+def run_ocr_from_image(image: np.ndarray, use_preprocessing: bool = True) -> Dict:
     """
     Run OCR on an image region (Stage-0 compatible).
+    Tries both preprocessed and original images, returns the better result.
+    
+    Args:
+        image: Input image as numpy array
+        use_preprocessing: If True, try preprocessing and compare with original
     """
     if image is None:
         return {"engine": "PaddleOCR", "full_text": "", "tokens": []}
 
-    result = ocr_engine.ocr(image, cls=True)
-    return _parse_ocr_result(result)
+    original_result = None
+    preprocessed_result = None
+    
+    # Try original image first
+    try:
+        result = ocr_engine.ocr(image, cls=True)
+        original_result = _parse_ocr_result(result)
+    except Exception as e:
+        print(f"[WARN] OCR on original failed: {e}")
+    
+    # Try with preprocessing
+    if use_preprocessing:
+        try:
+            from src.vision.preprocessing import preprocess_for_ocr
+            processed = preprocess_for_ocr(image)
+            result = ocr_engine.ocr(processed, cls=True)
+            preprocessed_result = _parse_ocr_result(result)
+        except Exception as e:
+            print(f"[WARN] Preprocessing failed: {e}")
+
+    # Compare results and return the better one
+    orig_tokens = len(original_result["tokens"]) if original_result else 0
+    prep_tokens = len(preprocessed_result["tokens"]) if preprocessed_result else 0
+    
+    if prep_tokens > orig_tokens:
+        print(f"[INFO] Using preprocessed result ({prep_tokens} tokens vs {orig_tokens})")
+        return preprocessed_result
+    elif orig_tokens > 0:
+        print(f"[INFO] Using original result ({orig_tokens} tokens vs {prep_tokens})")
+        return original_result
+    elif preprocessed_result:
+        return preprocessed_result
+    elif original_result:
+        return original_result
+    else:
+        return {"engine": "PaddleOCR", "full_text": "", "tokens": []}
 
 
 # -------------------------------------------------

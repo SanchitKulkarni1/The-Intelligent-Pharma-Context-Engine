@@ -37,6 +37,7 @@ class Verification(BaseModel):
     matched_term: Optional[str]
     match_score: Optional[float]
     final_canonical_name: Optional[str]
+    justification: Optional[str] = None
 
 
 class Enrichment(BaseModel):

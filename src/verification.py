@@ -69,6 +69,18 @@ def formulation_mismatch(rx_term: str, ocr_text: str) -> bool:
 
 
 def query_rxnorm(term: str) -> List[str]:
+    """Query RxNorm with exact match first, then approximate match as fallback."""
+    results = _query_rxnorm_exact(term)
+    
+    # If no exact results, try approximate match (handles OCR typos)
+    if not results:
+        results = _query_rxnorm_approximate(term)
+    
+    return results
+
+
+def _query_rxnorm_exact(term: str) -> List[str]:
+    """Exact match query to RxNorm drugs endpoint."""
     try:
         r = requests.get(
             RXNORM_SEARCH_URL,
@@ -84,6 +96,26 @@ def query_rxnorm(term: str) -> List[str]:
         for p in g.get("conceptProperties", []) or []:
             if "name" in p:
                 results.append(p["name"])
+    return results
+
+
+def _query_rxnorm_approximate(term: str) -> List[str]:
+    """Approximate match query using RxNorm's approximateTerm endpoint (handles OCR typos)."""
+    try:
+        r = requests.get(
+            "https://rxnav.nlm.nih.gov/REST/approximateTerm.json",
+            params={"term": term, "maxEntries": 10},
+            timeout=5
+        )
+        candidates = r.json().get("approximateGroup", {}).get("candidate", [])
+    except Exception:
+        return []
+
+    results = []
+    for c in candidates:
+        name = c.get("name")
+        if name:
+            results.append(name)
     return results
 
 
@@ -149,6 +181,9 @@ def verify_drug(doc):
 
     text = doc.raw_ocr.full_text
     tokens = extract_candidate_terms(text)
+    
+    # Also try the full text as a query (helps with multi-word drug names)
+    tokens.append(text.strip())
 
     candidates: Dict[str, Dict] = {}
 

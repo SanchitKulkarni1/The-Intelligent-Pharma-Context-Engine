@@ -5,23 +5,39 @@ from typing import Optional
 from schema import Barcode
 
 
-def detect_barcode_from_image(image) -> Optional[Barcode]:
+def detect_barcode_from_image(image, use_preprocessing: bool = True) -> Optional[Barcode]:
     """
     Decode barcode / DataMatrix from an image region (Stage-0 compatible).
+    Applies preprocessing for challenging images (blur, glare, etc.)
     """
     try:
         if image is None:
             return None
 
-        # Convert to grayscale (improves decode reliability)
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Try with preprocessing first
+        if use_preprocessing:
+            try:
+                from src.vision.preprocessing import enhance_for_barcode
+                processed = enhance_for_barcode(image)
+                gray_processed = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+                results = decode(gray_processed)
+                
+                if results:
+                    b = results[0]
+                    value = b.data.decode("utf-8").strip()
+                    print(f"[STAGE-0] Detected barcode (preprocessed): {value} | type={b.type}")
+                    return Barcode(value=value, symbology=b.type, confidence=1.0)
+            except Exception as e:
+                print(f"[WARN] Barcode preprocessing failed: {e}")
 
+        # Fallback to original image
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         results = decode(gray)
 
         if not results:
             return None
 
-        b = results[0]  # First barcode is enough for prototype
+        b = results[0]
         value = b.data.decode("utf-8").strip()
 
         print(f"[STAGE-0] Detected barcode: {value} | type={b.type}")
